@@ -21,13 +21,16 @@ const User = mongoose.model("User", new mongoose.Schema({
   discordId: String,
   swipebucks: { type: Number, default: 0 },
   usernames: [String],
-  lastDaily: Number
+  lastDaily: Number,
+  lastTrade: Number,
+  lastClaim: Number
 }));
 
 const Username = mongoose.model("Username", new mongoose.Schema({
   name: { type: String, unique: true },
   ownerId: String,
-  price: Number
+  price: Number,
+  locked: { type: Boolean, default: false }
 }));
 
 const Trade = mongoose.model("Trade", new mongoose.Schema({
@@ -35,7 +38,8 @@ const Trade = mongoose.model("Trade", new mongoose.Schema({
   to: String,
   offer: String,
   request: String,
-  status: { type: String, default: "pending" }
+  status: { type: String, default: "pending" },
+  createdAt: { type: Number, default: Date.now }
 }));
 
 const Auction = mongoose.model("Auction", new mongoose.Schema({
@@ -47,17 +51,54 @@ const Auction = mongoose.model("Auction", new mongoose.Schema({
   active: { type: Boolean, default: true }
 }));
 
-const Inbox = mongoose.model("Inbox", new mongoose.Schema({
-  userId: String,
-  message: String,
-  type: String,
-  read: { type: Boolean, default: false }
-}));
-
 // ================= CLIENT =================
 const client = new Client({
   intents: [GatewayIntentBits.Guilds]
 });
+
+// ================= ADMIN SYSTEM =================
+const OWNER_ID = "1519064660501074133";
+const ADMIN_ROLE = "1519756610287697920";
+
+async function isAdmin(member) {
+  if (!member) return false;
+  if (member.id === OWNER_ID) return true;
+  if (member.roles?.cache?.has(ADMIN_ROLE)) return true;
+  return false;
+}
+
+// ================= COOLDOWNS (ANTI-SPAM) =================
+const cooldowns = new Map();
+
+function checkCooldown(userId, key, ms) {
+  const now = Date.now();
+  const id = `${userId}:${key}`;
+
+  if (cooldowns.has(id)) {
+    const last = cooldowns.get(id);
+    if (now - last < ms) return false;
+  }
+
+  cooldowns.set(id, now);
+  return true;
+}
+
+// ================= ANTI EXPLOIT VALUE SYSTEM =================
+function getValue(name) {
+  const len = name.length;
+
+  if (len === 1) return 8000000;
+  if (len === 2) return 2000000;
+  if (len === 3) return 500000;
+  if (len === 4) return 120000;
+
+  let v = 5000;
+
+  if (/^[a-z]+$/.test(name)) v += 100000;
+  if (/[0-9]/.test(name)) v -= 30000;
+
+  return v;
+}
 
 // ================= HELPERS =================
 async function getUser(id) {
@@ -68,47 +109,36 @@ async function getUser(id) {
   );
 }
 
-function getValue(name) {
-  const len = name.length;
-  if (len === 1) return 8000000;
-  if (len === 2) return 2000000;
-  if (len === 3) return 500000;
-  if (len === 4) return 120000;
-  let v = 5000;
-  if (/^[a-z]+$/.test(name)) v += 100000;
-  if (/[0-9]/.test(name)) v -= 30000;
-  return v;
-}
-
-async function notify(userId, msg, type = "system") {
-  await Inbox.create({ userId, message: msg, type });
-}
-
 // ================= COMMANDS =================
 const commands = [
-  new SlashCommandBuilder().setName("claim").setDescription("Claim username"),
-  new SlashCommandBuilder().setName("balance").setDescription("Balance"),
+  new SlashCommandBuilder()
+    .setName("claim")
+    .setDescription("Claim username")
+    .addStringOption(o => o.setName("name").setRequired(true)),
+
+  new SlashCommandBuilder().setName("balance").setDescription("Check balance"),
+
   new SlashCommandBuilder().setName("daily").setDescription("Daily reward"),
+
   new SlashCommandBuilder()
     .setName("trade")
-    .setDescription("Trade user/currency")
-    .addUserOption(o => o.setName("user").setDescription("User").setRequired(true))
-    .addStringOption(o => o.setName("offer").setDescription("Offer").setRequired(true))
-    .addStringOption(o => o.setName("request").setDescription("Request").setRequired(true)),
+    .setDescription("Trade system")
+    .addUserOption(o => o.setName("user").setRequired(true))
+    .addStringOption(o => o.setName("offer").setRequired(true))
+    .addStringOption(o => o.setName("request").setRequired(true)),
+
   new SlashCommandBuilder()
     .setName("auction")
-    .setDescription("Start auction")
+    .setDescription("Create auction")
     .addStringOption(o => o.setName("item").setRequired(true))
-    .addIntegerOption(o => o.setName("time").setRequired(true)),
-  new SlashCommandBuilder().setName("market").setDescription("Market"),
-  new SlashCommandBuilder().setName("leaderboard").setDescription("Leaderboard")
+    .addIntegerOption(o => o.setName("time").setRequired(true))
 ].map(c => c.toJSON());
 
 const rest = new REST({ version: "10" }).setToken(process.env.TOKEN);
 
 // ================= READY =================
 client.once("ready", async () => {
-  console.log("💎 SWIPECORE FINAL ONLINE");
+  console.log("💎 SwipeCore Secure Online");
 
   await rest.put(
     Routes.applicationCommands(process.env.CLIENT_ID),
@@ -121,8 +151,11 @@ client.on("interactionCreate", async (i) => {
 
   const u = await getUser(i.user.id);
 
-  // ================= CLAIM =================
+  // ================= CLAIM (ANTI DUP + COOLDOWN) =================
   if (i.commandName === "claim") {
+
+    if (!checkCooldown(i.user.id, "claim", 10000))
+      return i.reply("⏳ Slow down (anti-exploit)");
 
     const name = i.options.getString("name");
 
@@ -146,7 +179,7 @@ client.on("interactionCreate", async (i) => {
   // ================= DAILY =================
   if (i.commandName === "daily") {
 
-    if (Date.now() - (u.lastDaily || 0) < 86400000)
+    if (!checkCooldown(i.user.id, "daily", 86400000))
       return i.reply("Already claimed");
 
     u.swipebucks += 1000;
@@ -157,8 +190,11 @@ client.on("interactionCreate", async (i) => {
     return i.reply("+1000 SwipeBucks");
   }
 
-  // ================= TRADE =================
+  // ================= TRADE (ANTI EXPLOIT) =================
   if (i.commandName === "trade") {
+
+    if (!checkCooldown(i.user.id, "trade", 8000))
+      return i.reply("⏳ Trade cooldown");
 
     const to = i.options.getUser("user");
     const offer = i.options.getString("offer");
@@ -183,7 +219,7 @@ client.on("interactionCreate", async (i) => {
     );
 
     return i.reply({
-      content: `🤝 Trade from <@${i.user.id}> to <@${to.id}>`,
+      content: `🤝 Trade created`,
       components: [row]
     });
   }
@@ -194,51 +230,17 @@ client.on("interactionCreate", async (i) => {
     const item = i.options.getString("item");
     const time = i.options.getInteger("time");
 
-    const auction = await Auction.create({
+    await Auction.create({
       item,
       sellerId: i.user.id,
       endTime: Date.now() + time * 60000
     });
 
-    return i.reply(`🏷️ Auction started for ${item}`);
-  }
-
-  // ================= MARKET =================
-  if (i.commandName === "market") {
-
-    const items = await Username.find().limit(10);
-
-    const embed = new EmbedBuilder().setTitle("🛒 Market");
-
-    for (const x of items) {
-      embed.addFields({
-        name: x.name,
-        value: `💰 ${x.price} | 👤 <@${x.ownerId}>`
-      });
-    }
-
-    return i.reply({ embeds: [embed] });
-  }
-
-  // ================= LEADERBOARD =================
-  if (i.commandName === "leaderboard") {
-
-    const users = await User.find().sort({ swipebucks: -1 }).limit(10);
-
-    const embed = new EmbedBuilder().setTitle("🏆 Rich List");
-
-    users.forEach(x => {
-      embed.addFields({
-        name: x.discordId,
-        value: `${x.swipebucks}`
-      });
-    });
-
-    return i.reply({ embeds: [embed] });
+    return i.reply(`🏷️ Auction started`);
   }
 });
 
-// ================= BUTTONS =================
+// ================= BUTTONS (TRADE SECURITY) =================
 client.on("interactionCreate", async (i) => {
 
   if (!i.isButton()) return;
@@ -251,13 +253,15 @@ client.on("interactionCreate", async (i) => {
   const from = await getUser(trade.from);
   const to = await getUser(trade.to);
 
+  // ================= ACCEPT =================
   if (action === "accept") {
 
     if (i.user.id !== trade.to)
-      return i.reply({ content: "Not yours", ephemeral: true });
+      return i.reply({ content: "Not your trade", ephemeral: true });
 
-    to.swipebucks += 100;
-    from.swipebucks += 100;
+    // prevent double-accept exploit
+    if (trade.status !== "pending")
+      return i.reply({ content: "Already processed", ephemeral: true });
 
     trade.status = "accepted";
 
@@ -265,12 +269,17 @@ client.on("interactionCreate", async (i) => {
     await to.save();
     await trade.save();
 
-    await notify(trade.from, "Trade accepted", "trade");
-
     return i.reply("✅ Accepted");
   }
 
+  // ================= DECLINE =================
   if (action === "decline") {
+
+    if (i.user.id !== trade.to)
+      return i.reply({ content: "Not your trade", ephemeral: true });
+
+    if (trade.status !== "pending")
+      return i.reply({ content: "Already processed", ephemeral: true });
 
     trade.status = "declined";
     await trade.save();
