@@ -80,6 +80,9 @@ function price(name) {
 }
 
 // ================= COMMANDS =================
+const safe = (v, fallback = "None") =>
+  typeof v === "string" && v.trim().length ? v : fallback;
+
 const commands = [
 
   new SlashCommandBuilder().setName("claim").setDescription("Claim username")
@@ -92,11 +95,11 @@ const commands = [
   new SlashCommandBuilder().setName("market").setDescription("Market"),
 
   new SlashCommandBuilder().setName("sell").setDescription("Sell username")
-    .addStringOption(o => o.setName("name").setRequired(true))
-    .addIntegerOption(o => o.setName("price").setRequired(true)),
+    .addStringOption(o => o.setName("name").setDescription("name").setRequired(true))
+    .addIntegerOption(o => o.setName("price").setDescription("price").setRequired(true)),
 
   new SlashCommandBuilder().setName("buy").setDescription("Buy username")
-    .addStringOption(o => o.setName("name").setRequired(true)),
+    .addStringOption(o => o.setName("name").setDescription("name").setRequired(true)),
 
   new SlashCommandBuilder().setName("trade").setDescription("Escrow trade")
     .addUserOption(o => o.setName("user").setDescription("target").setRequired(true))
@@ -109,31 +112,31 @@ const commands = [
 
   // ===== ADMIN =====
   new SlashCommandBuilder().setName("addcurrency").setDescription("Add money")
-    .addUserOption(o => o.setName("user").setRequired(true))
-    .addIntegerOption(o => o.setName("amount").setRequired(true)),
+    .addUserOption(o => o.setName("user").setDescription("user").setRequired(true))
+    .addIntegerOption(o => o.setName("amount").setDescription("amount").setRequired(true)),
 
   new SlashCommandBuilder().setName("removecurrency").setDescription("Remove money")
-    .addUserOption(o => o.setName("user").setRequired(true))
-    .addIntegerOption(o => o.setName("amount").setRequired(true)),
+    .addUserOption(o => o.setName("user").setDescription("user").setRequired(true))
+    .addIntegerOption(o => o.setName("amount").setDescription("amount").setRequired(true)),
 
   new SlashCommandBuilder().setName("setbalance").setDescription("Set balance")
-    .addUserOption(o => o.setName("user").setRequired(true))
-    .addIntegerOption(o => o.setName("amount").setRequired(true)),
+    .addUserOption(o => o.setName("user").setDescription("user").setRequired(true))
+    .addIntegerOption(o => o.setName("amount").setDescription("amount").setRequired(true)),
 
   new SlashCommandBuilder().setName("revoke").setDescription("Delete username")
-    .addStringOption(o => o.setName("name").setRequired(true)),
+    .addStringOption(o => o.setName("name").setDescription("name").setRequired(true)),
 
   new SlashCommandBuilder().setName("freeze").setDescription("Freeze username")
-    .addStringOption(o => o.setName("name").setRequired(true)),
+    .addStringOption(o => o.setName("name").setDescription("name").setRequired(true)),
 
   new SlashCommandBuilder().setName("unfreeze").setDescription("Unfreeze username")
-    .addStringOption(o => o.setName("name").setRequired(true)),
+    .addStringOption(o => o.setName("name").setDescription("name").setRequired(true)),
 
   new SlashCommandBuilder().setName("leaderboard").setDescription("Top users"),
 
   new SlashCommandBuilder().setName("admin").setDescription("Admin panel")
 
-].map(x => x.toJSON());
+].map(c => c.toJSON());
 
 // ================= REGISTER =================
 const rest = new REST({ version: "10" }).setToken(process.env.TOKEN);
@@ -178,13 +181,12 @@ client.on("interactionCreate", async (i) => {
         .setCustomId("inventory")
         .setPlaceholder("Select item")
         .addOptions(
-          items.map(x => ({
-            label: x.name,
-            description: `${x.rarity} | ${x.value}`,
-            value: x.name
-          }))
-        )
-    );
+  items.map(x => ({
+    label: x.name || "unknown",
+    description: `${x.rarity || "COMMON"} | ${x.value || 0}`,
+    value: x.name || "unknown"
+  }))
+)
 
     return i.reply({ content: "📦 Inventory", components: [menu], ephemeral: true });
   }
