@@ -23,15 +23,19 @@ const ADMIN_ROLE = "1519756610287697920";
 // ================= CLIENT =================
 const client = new Client({ intents: [GatewayIntentBits.Guilds] });
 
-// ================= ECONOMY STATE =================
+// ================= ECONOMY =================
 let MULTIPLIER = 1;
+
+// inflation system
+setInterval(() => {
+  const change = Math.random() < 0.5 ? -0.02 : 0.03;
+  MULTIPLIER = Math.max(0.5, Math.min(2, MULTIPLIER + change));
+}, 600000);
 
 // ================= MODELS =================
 const User = mongoose.model("User", new mongoose.Schema({
   discordId: String,
-  balance: { type: Number, default: 1000 },
-  tradeBanned: { type: Boolean, default: false },
-  marketBanned: { type: Boolean, default: false }
+  balance: { type: Number, default: 1000 }
 }));
 
 const Username = mongoose.model("Username", new mongoose.Schema({
@@ -50,8 +54,7 @@ const Trade = mongoose.model("Trade", new mongoose.Schema({
   to: String,
   offer: String,
   request: String,
-  status: { type: String, default: "pending" },
-  locked: { type: Boolean, default: true }
+  status: { type: String, default: "pending" }
 }));
 
 const Auction = mongoose.model("Auction", new mongoose.Schema({
@@ -112,55 +115,52 @@ async function log(action, by, target = "none") {
 // ================= COMMANDS =================
 const commands = [
   new SlashCommandBuilder().setName("claim").setDescription("Claim username")
-    .addStringOption(o => o.setName("name").setDescription("username").setRequired(true)),
+    .addStringOption(o => o.setName("name").setRequired(true)),
 
-  new SlashCommandBuilder().setName("users").setDescription("Your usernames"),
+  new SlashCommandBuilder().setName("users").setDescription("Inventory"),
 
-  new SlashCommandBuilder().setName("balance").setDescription("Check balance"),
+  new SlashCommandBuilder().setName("balance").setDescription("Balance"),
 
-  new SlashCommandBuilder().setName("market").setDescription("Marketplace"),
+  new SlashCommandBuilder().setName("market").setDescription("Market"),
 
-  new SlashCommandBuilder().setName("sell").setDescription("Sell username")
-    .addStringOption(o => o.setName("name").setDescription("name").setRequired(true))
-    .addIntegerOption(o => o.setName("price").setDescription("price").setRequired(true)),
+  new SlashCommandBuilder().setName("sell").setDescription("Sell")
+    .addStringOption(o => o.setName("name").setRequired(true))
+    .addIntegerOption(o => o.setName("price").setRequired(true)),
 
-  new SlashCommandBuilder().setName("buy").setDescription("Buy username")
-    .addStringOption(o => o.setName("name").setDescription("name").setRequired(true)),
+  new SlashCommandBuilder().setName("buy").setDescription("Buy")
+    .addStringOption(o => o.setName("name").setRequired(true)),
 
-  new SlashCommandBuilder().setName("inventory").setDescription("Inventory UI"),
+  new SlashCommandBuilder().setName("trade").setDescription("Trade")
+    .addUserOption(o => o.setName("user").setRequired(true))
+    .addStringOption(o => o.setName("offer").setRequired(true))
+    .addStringOption(o => o.setName("request").setRequired(true)),
 
-  new SlashCommandBuilder().setName("trade").setDescription("Escrow trade")
-    .addUserOption(o => o.setName("user").setDescription("user").setRequired(true))
-    .addStringOption(o => o.setName("offer").setDescription("offer").setRequired(true))
-    .addStringOption(o => o.setName("request").setDescription("request").setRequired(true)),
-
-  new SlashCommandBuilder().setName("auction").setDescription("Auction item")
-    .addStringOption(o => o.setName("item").setDescription("item").setRequired(true))
-    .addIntegerOption(o => o.setName("time").setDescription("minutes").setRequired(true)),
+  new SlashCommandBuilder().setName("auction").setDescription("Auction")
+    .addStringOption(o => o.setName("item").setRequired(true))
+    .addIntegerOption(o => o.setName("time").setRequired(true)),
 
   new SlashCommandBuilder().setName("bid").setDescription("Bid auction")
-    .addStringOption(o => o.setName("item").setDescription("item").setRequired(true))
-    .addIntegerOption(o => o.setName("amount").setDescription("amount").setRequired(true)),
+    .addStringOption(o => o.setName("item").setRequired(true))
+    .addIntegerOption(o => o.setName("amount").setRequired(true)),
 
-  new SlashCommandBuilder().setName("leaderboard").setDescription("Top users"),
+  new SlashCommandBuilder().setName("leaderboard").setDescription("Leaderboard"),
 
-  // ADMIN
   new SlashCommandBuilder().setName("addcurrency").setDescription("Add money")
-    .addUserOption(o => o.setName("user").setDescription("user").setRequired(true))
-    .addIntegerOption(o => o.setName("amount").setDescription("amount").setRequired(true)),
+    .addUserOption(o => o.setName("user").setRequired(true))
+    .addIntegerOption(o => o.setName("amount").setRequired(true)),
 
   new SlashCommandBuilder().setName("removecurrency").setDescription("Remove money")
-    .addUserOption(o => o.setName("user").setDescription("user").setRequired(true))
-    .addIntegerOption(o => o.setName("amount").setDescription("amount").setRequired(true)),
+    .addUserOption(o => o.setName("user").setRequired(true))
+    .addIntegerOption(o => o.setName("amount").setRequired(true)),
 
   new SlashCommandBuilder().setName("freeze").setDescription("Freeze username")
-    .addStringOption(o => o.setName("name").setDescription("name").setRequired(true)),
+    .addStringOption(o => o.setName("name").setRequired(true)),
 
   new SlashCommandBuilder().setName("unfreeze").setDescription("Unfreeze username")
-    .addStringOption(o => o.setName("name").setDescription("name").setRequired(true)),
+    .addStringOption(o => o.setName("name").setRequired(true)),
 
   new SlashCommandBuilder().setName("revoke").setDescription("Delete username")
-    .addStringOption(o => o.setName("name").setDescription("name").setRequired(true))
+    .addStringOption(o => o.setName("name").setRequired(true))
 ].map(c => c.toJSON());
 
 // ================= REST =================
@@ -177,6 +177,67 @@ client.once("ready", async () => {
 
 // ================= MAIN =================
 client.on("interactionCreate", async (i) => {
+
+  // ================= BUTTON TRADE HANDLER =================
+  if (i.isButton()) {
+    const [type, id] = i.customId.split(":");
+
+    const trade = await Trade.findById(id);
+    if (!trade || trade.status !== "pending") {
+      return i.reply({ content: "❌ Invalid trade", ephemeral: true });
+    }
+
+    if (i.user.id !== trade.to) {
+      return i.reply({ content: "❌ Not your trade", ephemeral: true });
+    }
+
+    const offerItem = await Username.findOne({
+      name: trade.offer,
+      ownerId: trade.from
+    });
+
+    const requestItem = await Username.findOne({
+      name: trade.request,
+      ownerId: trade.to
+    });
+
+    // ================= ACCEPT =================
+    if (type === "t_acc") {
+
+      if (!offerItem || !requestItem) {
+        trade.status = "failed";
+        await trade.save();
+        return i.update({ content: "❌ Missing items", components: [] });
+      }
+
+      // 🔥 REAL ESCROW TRANSFER
+      offerItem.ownerId = trade.to;
+      requestItem.ownerId = trade.from;
+
+      await offerItem.save();
+      await requestItem.save();
+
+      trade.status = "accepted";
+      await trade.save();
+
+      return i.update({
+        content: "✅ Trade completed (real escrow swap)",
+        components: []
+      });
+    }
+
+    // ================= DECLINE =================
+    if (type === "t_dec") {
+      trade.status = "declined";
+      await trade.save();
+
+      return i.update({
+        content: "❌ Trade declined",
+        components: []
+      });
+    }
+  }
+
   if (!i.isChatInputCommand()) return;
 
   const u = await getUser(i.user.id);
@@ -203,20 +264,19 @@ client.on("interactionCreate", async (i) => {
   if (i.commandName === "users") {
     const items = await Username.find({ ownerId: i.user.id });
 
-    const menu = new ActionRowBuilder().addComponents(
-      new StringSelectMenuBuilder()
-        .setCustomId("inv")
-        .setPlaceholder("Select username")
-        .addOptions(
-          items.map(x => ({
-            label: x.name,
-            description: `${x.rarity} | ${x.value}`,
-            value: x.name
-          }))
-        )
-    );
+    const menu = new StringSelectMenuBuilder()
+      .setCustomId("inv")
+      .setPlaceholder("Inventory")
+      .addOptions(items.map(x => ({
+        label: x.name,
+        value: x.name,
+        description: `${x.rarity} | ${x.value}`
+      })));
 
-    return i.reply({ content: "📦 Inventory", components: [menu] });
+    return i.reply({
+      content: "📦 Inventory",
+      components: [new ActionRowBuilder().addComponents(menu)]
+    });
   }
 
   // ===== BALANCE =====
@@ -232,12 +292,7 @@ client.on("interactionCreate", async (i) => {
       .setTitle("🏪 Market")
       .setDescription(items.map(x => `${x.name} - ${x.price}`).join("\n") || "Empty");
 
-    const row = new ActionRowBuilder().addComponents(
-      new ButtonBuilder().setCustomId("m_prev").setLabel("Prev").setStyle(ButtonStyle.Secondary),
-      new ButtonBuilder().setCustomId("m_next").setLabel("Next").setStyle(ButtonStyle.Secondary)
-    );
-
-    return i.reply({ embeds: [embed], components: [row] });
+    return i.reply({ embeds: [embed] });
   }
 
   // ===== SELL =====
@@ -246,8 +301,7 @@ client.on("interactionCreate", async (i) => {
     const price = i.options.getInteger("price");
 
     const item = await Username.findOne({ name, ownerId: i.user.id });
-    if (!item) return i.reply("Not yours");
-    if (item.frozen) return i.reply("Frozen");
+    if (!item || item.frozen) return i.reply("Invalid");
 
     item.forSale = true;
     item.price = price;
@@ -263,7 +317,6 @@ client.on("interactionCreate", async (i) => {
 
     const item = await Username.findOne({ name, forSale: true });
     if (!item) return i.reply("Not found");
-    if (item.locked) return i.reply("Locked");
 
     item.ownerId = i.user.id;
     item.forSale = false;
@@ -273,76 +326,56 @@ client.on("interactionCreate", async (i) => {
     return i.reply("Bought");
   }
 
-  // ===== ESCROW TRADE =====
-  if (i.commandName === "trade") {
-    const to = i.options.getUser("user");
-
-    const trade = await Trade.create({
-      from: i.user.id,
-      to: to.id,
-      offer: i.options.getString("offer"),
-      request: i.options.getString("request"),
-      locked: true
-    });
-
-    const row = new ActionRowBuilder().addComponents(
-      new ButtonBuilder().setCustomId(`t_acc:${trade._id}`).setLabel("ACCEPT").setStyle(ButtonStyle.Success),
-      new ButtonBuilder().setCustomId(`t_dec:${trade._id}`).setLabel("DECLINE").setStyle(ButtonStyle.Danger)
-    );
-
-    return i.reply({ content: "🔒 Escrow Trade", components: [row] });
-  }
-
   // ===== AUCTION =====
   if (i.commandName === "auction") {
-    const item = i.options.getString("item");
-    const time = i.options.getInteger("time");
-
     await Auction.create({
-      item,
+      item: i.options.getString("item"),
       sellerId: i.user.id,
       highestBid: 0,
-      endsAt: Date.now() + time * 60000,
+      endsAt: Date.now() + i.options.getInteger("time") * 60000,
       active: true
     });
 
     return i.reply("🏁 Auction started");
   }
 
-  // ===== BID (ANTI SNIPE) =====
+  // ===== BID =====
   if (i.commandName === "bid") {
-    const item = i.options.getString("item");
-    const amount = i.options.getInteger("amount");
+    const a = await Auction.findOne({
+      item: i.options.getString("item"),
+      active: true
+    });
 
-    const a = await Auction.findOne({ item, active: true });
     if (!a) return i.reply("No auction");
 
+    const amount = i.options.getInteger("amount");
     if (amount <= a.highestBid) return i.reply("Too low");
 
-    const timeLeft = a.endsAt - Date.now();
-    if (timeLeft < 15000) a.endsAt += 15000;
+    if (a.endsAt - Date.now() < 15000) a.endsAt += 15000;
 
     a.highestBid = amount;
     a.highestBidder = i.user.id;
-    await a.save();
 
+    await a.save();
     return i.reply("🔥 Bid placed");
   }
 
-  // ===== LEADERBOARD =====
+  // ===== LEADERBOARD (USERNAME VALUE) =====
   if (i.commandName === "leaderboard") {
-  const top = await User.find().sort({ balance: -1 }).limit(10);
+    const top = await Username.find().sort({ value: -1 }).limit(10);
 
-  const embed = new EmbedBuilder()
-    .setTitle("🏆 Leaderboard")
-    .setDescription(
-      top.length
-        ? top.map((x, i) => `#${i + 1} <@${x.discordId}> — 💰 ${x.balance}`).join("\n")
-        : "No users yet"
-    );
-
-  return i.reply({ embeds: [embed] });
-}
+    return i.reply({
+      embeds: [
+        new EmbedBuilder()
+          .setTitle("🏆 Username Leaderboard")
+          .setDescription(
+            top.map((x, i) =>
+              `#${i + 1} **${x.name}** — 💎 ${x.value}`
+            ).join("\n")
+          )
+      ]
+    });
+  }
 
   // ===== ADMIN =====
   if (!isAdmin(i.member)) return;
@@ -372,24 +405,20 @@ client.on("interactionCreate", async (i) => {
   }
 
   if (i.commandName === "freeze") {
-    const name = i.options.getString("name");
-    const x = await Username.findOne({ name });
-
+    const x = await Username.findOne({ name: i.options.getString("name") });
     x.frozen = true;
     await x.save();
 
-    await log("FREEZE", i.user.id, name);
+    await log("FREEZE", i.user.id, x.name);
     return i.reply("Frozen");
   }
 
   if (i.commandName === "unfreeze") {
-    const name = i.options.getString("name");
-    const x = await Username.findOne({ name });
-
+    const x = await Username.findOne({ name: i.options.getString("name") });
     x.frozen = false;
     await x.save();
 
-    await log("UNFREEZE", i.user.id, name);
+    await log("UNFREEZE", i.user.id, x.name);
     return i.reply("Unfrozen");
   }
 
