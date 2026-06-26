@@ -174,23 +174,27 @@ client.on("interactionCreate", async (i) => {
 
   // ================= USERS (FIXED SELECT MENU) =================
   if (i.commandName === "users") {
-    const items = await Username.find({ ownerId: i.user.id });
+  const items = await Username.find({ ownerId: i.user.id });
 
-    const menu = new ActionRowBuilder().addComponents(
-      new StringSelectMenuBuilder()
-        .setCustomId("inventory")
-        .setPlaceholder("Select item")
-        .addOptions(
-  items.map(x => ({
-    label: x.name || "unknown",
-    description: `${x.rarity || "COMMON"} | ${x.value || 0}`,
-    value: x.name || "unknown"
-  }))
-)
+  const menu = new ActionRowBuilder().addComponents(
+    new StringSelectMenuBuilder()
+      .setCustomId("inventory")
+      .setPlaceholder("Select item")
+      .addOptions(
+        items.map(x => ({
+          label: x.name || "unknown",
+          description: `${x.rarity || "COMMON"} | ${x.value || 0}`,
+          value: x.name || "unknown"
+        }))
+      )
+  );
 
-    return i.reply({ content: "📦 Inventory", components: [menu], ephemeral: true });
-  }
-
+  return i.reply({
+    content: "📦 Inventory",
+    components: [menu],
+    ephemeral: true
+  });
+}
   // ================= BALANCE =================
   if (i.commandName === "balance") {
     return i.reply(`💰 ${u.balance}`);
