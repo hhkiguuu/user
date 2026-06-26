@@ -331,9 +331,18 @@ client.on("interactionCreate", async (i) => {
 
   // ===== LEADERBOARD =====
   if (i.commandName === "leaderboard") {
-    const top = await User.find().sort({ balance: -1 }).limit(10);
-    return i.reply(top.map(x => `<@${x.discordId}> - ${x.balance}`).join("\n"));
-  }
+  const top = await User.find().sort({ balance: -1 }).limit(10);
+
+  const embed = new EmbedBuilder()
+    .setTitle("🏆 Leaderboard")
+    .setDescription(
+      top.length
+        ? top.map((x, i) => `#${i + 1} <@${x.discordId}> — 💰 ${x.balance}`).join("\n")
+        : "No users yet"
+    );
+
+  return i.reply({ embeds: [embed] });
+}
 
   // ===== ADMIN =====
   if (!isAdmin(i.member)) return;
