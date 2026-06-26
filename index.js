@@ -6,50 +6,47 @@ const {
   EmbedBuilder,
   ActionRowBuilder,
   ButtonBuilder,
-  ButtonStyle
+  ButtonStyle,
+  SlashCommandBuilder,
+  REST,
+  Routes,
+  StringSelectMenuBuilder,
+  ComponentType
 } = require("discord.js");
 
 const mongoose = require("mongoose");
-
 mongoose.connect(process.env.MONGO_URI);
 
 // ================= CLIENT =================
-const client = new Client({
-  intents: [GatewayIntentBits.Guilds]
-});
+const client = new Client({ intents: [GatewayIntentBits.Guilds] });
 
 // ================= CONFIG =================
 const OWNER_ID = process.env.OWNER_ID;
 
+// ================= ECONOMY =================
+let MULTIPLIER = 1;
+
 // ================= MODELS =================
 const User = mongoose.model("User", new mongoose.Schema({
   discordId: String,
-  balance: { type: Number, default: 1000 },
-  netWorth: { type: Number, default: 0 }
+  balance: { type: Number, default: 1000 }
 }));
 
 const Username = mongoose.model("Username", new mongoose.Schema({
   name: { type: String, unique: true },
   ownerId: String,
   value: Number,
-  forSale: Boolean,
+  rarity: String,
+  forSale: { type: Boolean, default: false },
   price: Number,
-  frozen: Boolean,
-  createdAt: { type: Date, default: Date.now }
-}));
-
-const Auction = mongoose.model("Auction", new mongoose.Schema({
-  item: String,
-  sellerId: String,
-  highestBid: { type: Number, default: 0 },
-  highestBidder: String,
-  endsAt: Number,
-  active: { type: Boolean, default: true }
+  frozen: { type: Boolean, default: false }
 }));
 
 const Trade = mongoose.model("Trade", new mongoose.Schema({
   from: String,
   to: String,
+  offer: String,
+  request: String,
   status: { type: String, default: "pending" }
 }));
 
@@ -62,191 +59,348 @@ async function getUser(id) {
   );
 }
 
-function isOwner(i) {
-  return i.user.id === OWNER_ID;
+function rarity(name) {
+  if (name.length === 1) return "MYTHIC";
+  if (name.length === 2) return "LEGENDARY";
+  if (name.length === 3) return "EPIC";
+  if (name.length === 4) return "RARE";
+  return "COMMON";
 }
 
-// ================= AUCTION ENGINE =================
-async function endAuction(id, client) {
-  const a = await Auction.findById(id);
-  if (!a || !a.active) return;
+function price(name) {
+  let base =
+    name.length === 1 ? 10000000 :
+    name.length === 2 ? 2000000 :
+    name.length === 3 ? 500000 :
+    name.length === 4 ? 120000 :
+    5000;
 
-  a.active = false;
-  await a.save();
-
-  const winner = a.highestBidder;
-
-  const guild = client.guilds.cache.first();
-  const channel = guild?.systemChannel;
-
-  if (channel) {
-    channel.send({
-      embeds: [
-        new EmbedBuilder()
-          .setTitle("🏁 Auction Ended")
-          .setDescription(
-            `Item: **${a.item}**\n` +
-            `Seller: <@${a.sellerId}>\n` +
-            `Winner: ${winner ? `<@${winner}>` : "No bids"}\n` +
-            `Price: ${a.highestBid}`
-          )
-      ]
-    });
-  }
+  if (/[0-9]/.test(name)) base *= 0.8;
+  return Math.floor(base * MULTIPLIER);
 }
 
-// ================= INTERACTIONS =================
+// ================= COMMANDS =================
+const commands = [
+
+  new SlashCommandBuilder().setName("claim").setDescription("Claim username")
+    .addStringOption(o => o.setName("name").setDescription("name").setRequired(true)),
+
+  new SlashCommandBuilder().setName("users").setDescription("Inventory"),
+
+  new SlashCommandBuilder().setName("balance").setDescription("Balance"),
+
+  new SlashCommandBuilder().setName("market").setDescription("Market"),
+
+  new SlashCommandBuilder().setName("sell").setDescription("Sell username")
+    .addStringOption(o => o.setName("name").setRequired(true))
+    .addIntegerOption(o => o.setName("price").setRequired(true)),
+
+  new SlashCommandBuilder().setName("buy").setDescription("Buy username")
+    .addStringOption(o => o.setName("name").setRequired(true)),
+
+  new SlashCommandBuilder().setName("trade").setDescription("Escrow trade")
+    .addUserOption(o => o.setName("user").setDescription("target").setRequired(true))
+    .addStringOption(o => o.setName("offer").setDescription("offer").setRequired(true))
+    .addStringOption(o => o.setName("request").setDescription("request").setRequired(true)),
+
+  new SlashCommandBuilder().setName("transfer").setDescription("Transfer username")
+    .addUserOption(o => o.setName("user").setDescription("target").setRequired(true))
+    .addStringOption(o => o.setName("name").setDescription("name").setRequired(true)),
+
+  // ===== ADMIN =====
+  new SlashCommandBuilder().setName("addcurrency").setDescription("Add money")
+    .addUserOption(o => o.setName("user").setRequired(true))
+    .addIntegerOption(o => o.setName("amount").setRequired(true)),
+
+  new SlashCommandBuilder().setName("removecurrency").setDescription("Remove money")
+    .addUserOption(o => o.setName("user").setRequired(true))
+    .addIntegerOption(o => o.setName("amount").setRequired(true)),
+
+  new SlashCommandBuilder().setName("setbalance").setDescription("Set balance")
+    .addUserOption(o => o.setName("user").setRequired(true))
+    .addIntegerOption(o => o.setName("amount").setRequired(true)),
+
+  new SlashCommandBuilder().setName("revoke").setDescription("Delete username")
+    .addStringOption(o => o.setName("name").setRequired(true)),
+
+  new SlashCommandBuilder().setName("freeze").setDescription("Freeze username")
+    .addStringOption(o => o.setName("name").setRequired(true)),
+
+  new SlashCommandBuilder().setName("unfreeze").setDescription("Unfreeze username")
+    .addStringOption(o => o.setName("name").setRequired(true)),
+
+  new SlashCommandBuilder().setName("leaderboard").setDescription("Top users"),
+
+  new SlashCommandBuilder().setName("admin").setDescription("Admin panel")
+
+].map(x => x.toJSON());
+
+// ================= REGISTER =================
+const rest = new REST({ version: "10" }).setToken(process.env.TOKEN);
+
+client.once("ready", async () => {
+  await rest.put(
+    Routes.applicationGuildCommands(process.env.CLIENT_ID, process.env.GUILD_ID),
+    { body: commands }
+  );
+  console.log("V18 ONLINE");
+});
+
+// ================= MAIN =================
 client.on("interactionCreate", async (i) => {
   if (!i.isChatInputCommand()) return;
 
   const u = await getUser(i.user.id);
 
-  // ===== BALANCE =====
-  if (i.commandName === "balance") {
-    return i.reply(`💰 ${u.balance}`);
-  }
-
-  // ===== LEADERBOARD (FIXED USER LEADERBOARD) =====
-  if (i.commandName === "leaderboard") {
-    const top = await User.find().sort({ balance: -1 }).limit(10);
-
-    return i.reply({
-      embeds: [
-        new EmbedBuilder()
-          .setTitle("🏆 Leaderboard")
-          .setDescription(
-            top.map((x, i) =>
-              `#${i + 1} <@${x.discordId}> — 💰 ${x.balance}`
-            ).join("\n")
-          )
-      ]
-    });
-  }
-
-  // ===== CLAIM =====
+  // ================= CLAIM =================
   if (i.commandName === "claim") {
     const name = i.options.getString("name");
 
     const exists = await Username.findOne({ name });
     if (exists) return i.reply("Taken");
 
-    await Username.create({
+    const item = await Username.create({
       name,
       ownerId: i.user.id,
-      value: name.length * 1000,
-      forSale: false,
-      price: 0,
-      frozen: false
+      value: price(name),
+      rarity: rarity(name)
     });
 
-    return i.reply(`✅ Claimed **${name}**`);
+    return i.reply(`✅ Claimed ${name} (${item.rarity})`);
   }
 
-  // ===== USERS =====
+  // ================= USERS (FIXED SELECT MENU) =================
   if (i.commandName === "users") {
     const items = await Username.find({ ownerId: i.user.id });
 
-    return i.reply({
-      content: items.length
-        ? items.map(x => `📦 ${x.name} — 💎 ${x.value}`).join("\n")
-        : "No usernames"
-    });
+    const menu = new ActionRowBuilder().addComponents(
+      new StringSelectMenuBuilder()
+        .setCustomId("inventory")
+        .setPlaceholder("Select item")
+        .addOptions(
+          items.map(x => ({
+            label: x.name,
+            description: `${x.rarity} | ${x.value}`,
+            value: x.name
+          }))
+        )
+    );
+
+    return i.reply({ content: "📦 Inventory", components: [menu], ephemeral: true });
   }
 
-  // ===== TRADE UI (FIXED ESCROW BASE) =====
+  // ================= BALANCE =================
+  if (i.commandName === "balance") {
+    return i.reply(`💰 ${u.balance}`);
+  }
+
+  // ================= MARKET =================
+  if (i.commandName === "market") {
+    const items = await Username.find({ forSale: true });
+
+    const embed = new EmbedBuilder()
+      .setTitle("🏪 Market")
+      .setDescription(
+        items.map(x =>
+          `📦 ${x.name} — 💰 ${x.price} — ✨ ${x.rarity} — 👤 <@${x.ownerId}>`
+        ).join("\n") || "Empty"
+      );
+
+    return i.reply({ embeds: [embed] });
+  }
+
+  // ================= SELL =================
+  if (i.commandName === "sell") {
+    const name = i.options.getString("name");
+    const priceVal = i.options.getInteger("price");
+
+    const item = await Username.findOne({ name, ownerId: i.user.id });
+    if (!item) return i.reply("Not yours");
+
+    item.forSale = true;
+    item.price = priceVal;
+    await item.save();
+
+    return i.reply("Listed");
+  }
+
+  // ================= BUY (PING OWNER FIX) =================
+  if (i.commandName === "buy") {
+    const name = i.options.getString("name");
+
+    const item = await Username.findOne({ name, forSale: true });
+    if (!item) return i.reply("Not found");
+
+    const owner = item.ownerId;
+
+    item.ownerId = i.user.id;
+    item.forSale = false;
+    await item.save();
+
+    await i.reply(`Bought ${name} from <@${owner}>`);
+
+    // 🔥 OWNER PING
+    i.channel.send(`🔔 <@${owner}> your item **${name}** was bought!`);
+  }
+
+  // ================= TRANSFER =================
+  if (i.commandName === "transfer") {
+    const user = i.options.getUser("user");
+    const name = i.options.getString("name");
+
+    const item = await Username.findOne({ name, ownerId: i.user.id });
+    if (!item) return i.reply("Not yours");
+
+    item.ownerId = user.id;
+    await item.save();
+
+    return i.reply(`Transferred ${name} to <@${user.id}>`);
+  }
+
+  // ================= TRADE (FIXED ESCROW UI) =================
   if (i.commandName === "trade") {
-    const to = i.options.getUser("user");
+    const target = i.options.getUser("user");
 
     const trade = await Trade.create({
       from: i.user.id,
-      to: to.id,
-      status: "pending"
+      to: target.id,
+      offer: i.options.getString("offer"),
+      request: i.options.getString("request")
     });
 
     const row = new ActionRowBuilder().addComponents(
       new ButtonBuilder()
-        .setCustomId(`trade_accept:${trade._id}`)
+        .setCustomId(`trade_accept_${trade._id}`)
         .setLabel("ACCEPT")
         .setStyle(ButtonStyle.Success),
+
       new ButtonBuilder()
-        .setCustomId(`trade_decline:${trade._id}`)
-        .setLabel("DECLINE")
+        .setCustomId(`trade_deny_${trade._id}`)
+        .setLabel("DENY")
         .setStyle(ButtonStyle.Danger)
     );
 
+    return i.reply({ content: `Trade sent to <@${target.id}>`, components: [row] });
+  }
+
+  // ================= LEADERBOARD FIX =================
+  if (i.commandName === "leaderboard") {
+    const top = await User.find().sort({ balance: -1 }).limit(10);
+
+    return i.reply(
+      top.map((x, idx) =>
+        `#${idx + 1} <@${x.discordId}> — 💰 ${x.balance}`
+      ).join("\n")
+    );
+  }
+
+  // ================= ADMIN PANEL =================
+  if (i.commandName === "admin") {
+    if (i.user.id !== OWNER_ID) return i.reply("No permission");
+
+    const users = await User.countDocuments();
+    const items = await Username.countDocuments();
+
     return i.reply({
-      content: `🔒 Trade request sent to <@${to.id}>`,
-      components: [row]
+      embeds: [
+        new EmbedBuilder()
+          .setTitle("📊 ADMIN DASHBOARD")
+          .addFields(
+            { name: "Users", value: `${users}`, inline: true },
+            { name: "Items", value: `${items}`, inline: true }
+          )
+      ]
     });
   }
 
-  // ===== AUCTION START =====
-  if (i.commandName === "auction") {
-    const item = i.options.getString("item");
-    const time = i.options.getInteger("time");
+  // ================= ADMIN COMMANDS =================
+  if (i.user.id !== OWNER_ID) return;
 
-    const auction = await Auction.create({
-      item,
-      sellerId: i.user.id,
-      endsAt: Date.now() + time * 60000
-    });
+  if (i.commandName === "addcurrency") {
+    const user = i.options.getUser("user");
+    const amt = i.options.getInteger("amount");
 
-    setTimeout(() => endAuction(auction._id, client), time * 60000);
+    const d = await getUser(user.id);
+    d.balance += amt;
+    await d.save();
 
-    return i.reply(`🏁 Auction started for **${item}**`);
+    return i.reply("Added");
   }
 
-  // ===== BID =====
-  if (i.commandName === "bid") {
-    const item = i.options.getString("item");
-    const amount = i.options.getInteger("amount");
+  if (i.commandName === "removecurrency") {
+    const user = i.options.getUser("user");
+    const amt = i.options.getInteger("amount");
 
-    const a = await Auction.findOne({ item, active: true });
-    if (!a) return i.reply("No auction");
+    const d = await getUser(user.id);
+    d.balance -= amt;
+    await d.save();
 
-    if (amount <= a.highestBid) return i.reply("Too low");
+    return i.reply("Removed");
+  }
 
-    a.highestBid = amount;
-    a.highestBidder = i.user.id;
+  if (i.commandName === "setbalance") {
+    const user = i.options.getUser("user");
+    const amt = i.options.getInteger("amount");
 
-    if (a.endsAt - Date.now() < 15000) {
-      a.endsAt += 15000;
-    }
+    const d = await getUser(user.id);
+    d.balance = amt;
+    await d.save();
 
-    await a.save();
+    return i.reply("Set");
+  }
 
-    return i.reply(`🔥 Bid placed: ${amount}`);
+  if (i.commandName === "revoke") {
+    const name = i.options.getString("name");
+    await Username.deleteOne({ name });
+
+    return i.reply("Deleted");
+  }
+
+  if (i.commandName === "freeze") {
+    const name = i.options.getString("name");
+    const item = await Username.findOne({ name });
+
+    item.frozen = true;
+    await item.save();
+
+    return i.reply("Frozen");
+  }
+
+  if (i.commandName === "unfreeze") {
+    const name = i.options.getString("name");
+    const item = await Username.findOne({ name });
+
+    item.frozen = false;
+    await item.save();
+
+    return i.reply("Unfrozen");
   }
 });
 
-// ================= TRADE BUTTONS =================
+// ================= TRADE BUTTON HANDLER =================
 client.on("interactionCreate", async (i) => {
   if (!i.isButton()) return;
 
-  const [action, id] = i.customId.split(":");
+  const [type, action, id] = i.customId.split("_");
+  if (type !== "trade") return;
 
   const trade = await Trade.findById(id);
-  if (!trade) return i.reply({ content: "Invalid trade", ephemeral: true });
+  if (!trade) return i.reply({ content: "Trade expired", ephemeral: true });
 
   if (i.user.id !== trade.to)
     return i.reply({ content: "Not your trade", ephemeral: true });
 
-  if (action === "trade_accept") {
+  if (action === "accept") {
     trade.status = "accepted";
     await trade.save();
-    return i.reply("Trade accepted");
+    return i.update({ content: "Trade accepted", components: [] });
   }
 
-  if (action === "trade_decline") {
-    trade.status = "declined";
+  if (action === "deny") {
+    trade.status = "denied";
     await trade.save();
-    return i.reply("Trade declined");
+    return i.update({ content: "Trade denied", components: [] });
   }
-});
-
-// ================= START =================
-client.once("ready", () => {
-  console.log(`Logged in as ${client.user.tag}`);
 });
 
 client.login(process.env.TOKEN);
