@@ -7,10 +7,10 @@ const {
   ActionRowBuilder,
   ButtonBuilder,
   ButtonStyle,
-  StringSelectMenuBuilder,
   SlashCommandBuilder,
   REST,
-  Routes
+  Routes,
+  StringSelectMenuBuilder
 } = require("discord.js");
 
 const mongoose = require("mongoose");
@@ -21,10 +21,6 @@ const client = new Client({ intents: [GatewayIntentBits.Guilds] });
 
 // ================= CONFIG =================
 const OWNER_ID = process.env.OWNER_ID;
-
-// ================= ECONOMY STATE =================
-let MULTIPLIER = 1;
-let ECONOMY_STATE = "stable"; // stable | inflation | crash
 
 // ================= MODELS =================
 const User = mongoose.model("User", new mongoose.Schema({
@@ -37,18 +33,8 @@ const Item = mongoose.model("Item", new mongoose.Schema({
   ownerId: String,
   value: Number,
   rarity: String,
-  forSale: Boolean,
-  price: Number,
-  locked: { type: Boolean, default: false }
-}));
-
-const Auction = mongoose.model("Auction", new mongoose.Schema({
-  item: String,
-  seller: String,
-  highestBid: Number,
-  highestBidder: String,
-  endTime: Number,
-  active: Boolean
+  forSale: { type: Boolean, default: false },
+  price: Number
 }));
 
 const Trade = mongoose.model("Trade", new mongoose.Schema({
@@ -56,8 +42,7 @@ const Trade = mongoose.model("Trade", new mongoose.Schema({
   to: String,
   offer: String,
   request: String,
-  locked: { type: Boolean, default: true },
-  status: String
+  status: { type: String, default: "pending" }
 }));
 
 // ================= HELPERS =================
@@ -69,6 +54,10 @@ async function getUser(id) {
   );
 }
 
+function isOwner(id) {
+  return id === OWNER_ID;
+}
+
 function rarity(name) {
   if (name.length === 1) return "MYTHIC";
   if (name.length === 2) return "LEGENDARY";
@@ -77,88 +66,53 @@ function rarity(name) {
   return "COMMON";
 }
 
-// AI PRICE ENGINE (simple simulation)
-function price(name) {
-  let base =
-    name.length === 1 ? 10000000 :
-    name.length === 2 ? 2000000 :
-    name.length === 3 ? 500000 :
-    name.length === 4 ? 120000 :
-    5000;
-
-  if (ECONOMY_STATE === "inflation") base *= 2;
-  if (ECONOMY_STATE === "crash") base *= 0.5;
-
-  if (/[0-9]/.test(name)) base *= 0.8;
-
-  return Math.floor(base * MULTIPLIER);
-}
-
 // ================= COMMANDS =================
 const commands = [
 
-  new SlashCommandBuilder()
-    .setName("claim")
-    .setDescription("Claim username")
-    .addStringOption(o =>
-      o.setName("name").setDescription("username").setRequired(true)
-    ),
+  new SlashCommandBuilder().setName("claim").setDescription("Claim username")
+    .addStringOption(o => o.setName("name").setDescription("name").setRequired(true)),
 
-  new SlashCommandBuilder()
-    .setName("balance")
-    .setDescription("Check balance"),
+  new SlashCommandBuilder().setName("balance").setDescription("Check balance"),
 
-  new SlashCommandBuilder()
-    .setName("inventory")
-    .setDescription("View items"),
+  new SlashCommandBuilder().setName("inventory").setDescription("View your items"),
 
-  new SlashCommandBuilder()
-    .setName("market")
-    .setDescription("Marketplace"),
+  new SlashCommandBuilder().setName("market").setDescription("View market"),
 
-  new SlashCommandBuilder()
-    .setName("buy")
-    .setDescription("Buy item")
-    .addStringOption(o =>
-      o.setName("name").setDescription("item").setRequired(true)
-    ),
+  new SlashCommandBuilder().setName("sell").setDescription("Sell item")
+    .addStringOption(o => o.setName("name").setRequired(true))
+    .addIntegerOption(o => o.setName("price").setRequired(true)),
 
-  new SlashCommandBuilder()
-    .setName("sell")
-    .setDescription("Sell item")
-    .addStringOption(o =>
-      o.setName("name").setDescription("item").setRequired(true)
-    )
-    .addIntegerOption(o =>
-      o.setName("price").setDescription("price").setRequired(true)
-    ),
+  new SlashCommandBuilder().setName("buy").setDescription("Buy item")
+    .addStringOption(o => o.setName("name").setRequired(true)),
 
-  new SlashCommandBuilder()
-    .setName("auction")
-    .setDescription("Place bid")
-    .addStringOption(o =>
-      o.setName("item").setDescription("item").setRequired(true)
-    )
-    .addIntegerOption(o =>
-      o.setName("amount").setDescription("bid").setRequired(true)
-    ),
+  new SlashCommandBuilder().setName("transfer").setDescription("Transfer item")
+    .addUserOption(o => o.setName("user").setRequired(true))
+    .addStringOption(o => o.setName("name").setRequired(true)),
 
-  new SlashCommandBuilder()
-    .setName("trade")
-    .setDescription("Escrow trade")
-    .addUserOption(o =>
-      o.setName("user").setDescription("user").setRequired(true)
-    )
-    .addStringOption(o =>
-      o.setName("offer").setDescription("your item").setRequired(true)
-    )
-    .addStringOption(o =>
-      o.setName("request").setDescription("their item").setRequired(true)
-    ),
+  new SlashCommandBuilder().setName("trade").setDescription("Escrow trade")
+    .addUserOption(o => o.setName("user").setRequired(true))
+    .addStringOption(o => o.setName("offer").setRequired(true))
+    .addStringOption(o => o.setName("request").setRequired(true)),
 
-  new SlashCommandBuilder()
-    .setName("admin")
-    .setDescription("Admin panel")
+  new SlashCommandBuilder().setName("leaderboard").setDescription("Top users"),
+
+  // ===== ADMIN =====
+  new SlashCommandBuilder().setName("admin").setDescription("Admin panel"),
+
+  new SlashCommandBuilder().setName("addmoney").setDescription("Add money")
+    .addUserOption(o => o.setName("user").setDescription("user").setRequired(true))
+    .addIntegerOption(o => o.setName("amount").setDescription("amount").setRequired(true)),
+
+  new SlashCommandBuilder().setName("removemoney").setDescription("Remove money")
+    .addUserOption(o => o.setName("user").setDescription("user").setRequired(true))
+    .addIntegerOption(o => o.setName("amount").setDescription("amount").setRequired(true)),
+
+  new SlashCommandBuilder().setName("setmoney").setDescription("Set money")
+    .addUserOption(o => o.setName("user").setDescription("user").setRequired(true))
+    .addIntegerOption(o => o.setName("amount").setDescription("amount").setRequired(true)),
+
+  new SlashCommandBuilder().setName("deleteitem").setDescription("Delete item")
+    .addStringOption(o => o.setName("name").setRequired(true))
 
 ].map(c => c.toJSON());
 
@@ -171,15 +125,16 @@ client.once("ready", async () => {
     { body: commands }
   );
 
-  console.log("V2 ECONOMY ONLINE");
+  console.log("V2 FULL SYSTEM ONLINE");
 });
 
-// ================= CLAIM =================
+// ================= MAIN HANDLER =================
 client.on("interactionCreate", async (i) => {
   if (!i.isChatInputCommand()) return;
 
-  const u = await getUser(i.user.id);
+  const user = await getUser(i.user.id);
 
+  // ================= CLAIM =================
   if (i.commandName === "claim") {
     const name = i.options.getString("name");
 
@@ -187,56 +142,183 @@ client.on("interactionCreate", async (i) => {
     if (exists)
       return i.reply(`❌ Taken by <@${exists.ownerId}>`);
 
-    const item = await Item.create({
+    await Item.create({
       name,
       ownerId: i.user.id,
-      value: price(name),
+      value: 1000,
       rarity: rarity(name)
     });
 
-    return i.reply(`✅ Claimed **${item.name}** (${item.rarity})`);
+    return i.reply(`✅ Claimed ${name}`);
   }
 
-  // BALANCE
+  // ================= BALANCE =================
   if (i.commandName === "balance") {
-    return i.reply(`💰 ${u.balance}`);
+    return i.reply(`💰 ${user.balance}`);
   }
 
-  // ADMIN ONLY
-  if (i.commandName === "admin") {
-    if (i.user.id !== OWNER_ID) return i.reply("No permission");
+  // ================= INVENTORY (FIXED SAFE MENU) =================
+  if (i.commandName === "inventory") {
+    const items = await Item.find({ ownerId: i.user.id });
+
+    if (!items.length)
+      return i.reply({ content: "Empty inventory", ephemeral: true });
+
+    const menu = new ActionRowBuilder().addComponents(
+      new StringSelectMenuBuilder()
+        .setCustomId("inv")
+        .setPlaceholder("Select item")
+        .addOptions(
+          items.slice(0, 25).map(x => ({
+            label: x.name,
+            description: `${x.rarity} | ${x.value}`,
+            value: x.name
+          }))
+        )
+    );
+
+    return i.reply({ content: "📦 Inventory", components: [menu], ephemeral: true });
+  }
+
+  // ================= MARKET =================
+  if (i.commandName === "market") {
+    const items = await Item.find({ forSale: true });
+
+    const embed = new EmbedBuilder()
+      .setTitle("🏪 Market")
+      .setDescription(
+        items.length
+          ? items.map(x =>
+              `📦 ${x.name} | 💰 ${x.price} | 👤 <@${x.ownerId}>`
+            ).join("\n")
+          : "Empty market"
+      );
+
+    return i.reply({ embeds: [embed] });
+  }
+
+  // ================= SELL =================
+  if (i.commandName === "sell") {
+    const name = i.options.getString("name");
+    const price = i.options.getInteger("price");
+
+    const item = await Item.findOne({ name, ownerId: i.user.id });
+    if (!item) return i.reply("Not yours");
+
+    item.forSale = true;
+    item.price = price;
+    await item.save();
+
+    return i.reply("Listed");
+  }
+
+  // ================= BUY (PING OWNER FIXED) =================
+  if (i.commandName === "buy") {
+    const name = i.options.getString("name");
+
+    const item = await Item.findOne({ name, forSale: true });
+    if (!item) return i.reply("Not found");
+
+    const oldOwner = item.ownerId;
+
+    item.ownerId = i.user.id;
+    item.forSale = false;
+    await item.save();
+
+    await i.reply(`Bought ${name} from <@${oldOwner}>`);
+
+    // 🔔 OWNER PING FIX
+    i.channel.send(`🔔 <@${oldOwner}> your item **${name}** was purchased!`);
+  }
+
+  // ================= TRANSFER =================
+  if (i.commandName === "transfer") {
+    const userTarget = i.options.getUser("user");
+    const name = i.options.getString("name");
+
+    const item = await Item.findOne({ name, ownerId: i.user.id });
+    if (!item) return i.reply("Not yours");
+
+    item.ownerId = userTarget.id;
+    await item.save();
+
+    return i.reply(`Transferred to <@${userTarget.id}>`);
+  }
+
+  // ================= LEADERBOARD FIXED =================
+  if (i.commandName === "leaderboard") {
+    const top = await User.find().sort({ balance: -1 }).limit(10);
 
     return i.reply({
       embeds: [
         new EmbedBuilder()
-          .setTitle("📊 ECONOMY STATUS")
-          .addFields(
-            { name: "State", value: ECONOMY_STATE },
-            { name: "Multiplier", value: `${MULTIPLIER}` }
+          .setTitle("🏆 Leaderboard")
+          .setDescription(
+            top.map((x, i) =>
+              `#${i + 1} <@${x.discordId}> — 💰 ${x.balance}`
+            ).join("\n")
           )
       ]
     });
   }
-});
 
-// ================= ECONOMY EVENTS =================
-// random inflation / crash system
-setInterval(() => {
-  const roll = Math.random();
+  // ================= ADMIN PANEL =================
+  if (i.commandName === "admin") {
+    if (!isOwner(i.user.id))
+      return i.reply("No permission");
 
-  if (roll < 0.05) {
-    ECONOMY_STATE = "crash";
-    MULTIPLIER = 0.6;
-  } else if (roll < 0.15) {
-    ECONOMY_STATE = "inflation";
-    MULTIPLIER = 2;
-  } else {
-    ECONOMY_STATE = "stable";
-    MULTIPLIER = 1;
+    return i.reply({
+      embeds: [
+        new EmbedBuilder()
+          .setTitle("⚙️ Admin Panel")
+          .setDescription("System online")
+      ]
+    });
   }
 
-  console.log("Economy updated:", ECONOMY_STATE);
-}, 60000);
+  // ================= ADMIN COMMANDS =================
+  if (!isOwner(i.user.id)) return;
 
-// ================= LOGIN =================
+  if (i.commandName === "addmoney") {
+    const u = i.options.getUser("user");
+    const amt = i.options.getInteger("amount");
+
+    const data = await getUser(u.id);
+    data.balance += amt;
+    await data.save();
+
+    return i.reply("Added");
+  }
+
+  if (i.commandName === "removemoney") {
+    const u = i.options.getUser("user");
+    const amt = i.options.getInteger("amount");
+
+    const data = await getUser(u.id);
+    data.balance -= amt;
+    await data.save();
+
+    return i.reply("Removed");
+  }
+
+  if (i.commandName === "setmoney") {
+    const u = i.options.getUser("user");
+    const amt = i.options.getInteger("amount");
+
+    const data = await getUser(u.id);
+    data.balance = amt;
+    await data.save();
+
+    return i.reply("Set");
+  }
+
+  if (i.commandName === "deleteitem") {
+    const name = i.options.getString("name");
+
+    await Item.deleteOne({ name });
+
+    return i.reply("Deleted");
+  }
+});
+
 client.login(process.env.TOKEN);
