@@ -7,10 +7,10 @@ const {
   ActionRowBuilder,
   ButtonBuilder,
   ButtonStyle,
+  StringSelectMenuBuilder,
   SlashCommandBuilder,
   REST,
-  Routes,
-  StringSelectMenuBuilder
+  Routes
 } = require("discord.js");
 
 const mongoose = require("mongoose");
@@ -22,8 +22,9 @@ const client = new Client({ intents: [GatewayIntentBits.Guilds] });
 // ================= CONFIG =================
 const OWNER_ID = process.env.OWNER_ID;
 
-// ================= ECONOMY SYSTEM =================
-let INFLATION = 1;
+// ================= ECONOMY STATE =================
+let MULTIPLIER = 1;
+let ECONOMY_STATE = "stable"; // stable | inflation | crash
 
 // ================= MODELS =================
 const User = mongoose.model("User", new mongoose.Schema({
@@ -31,14 +32,23 @@ const User = mongoose.model("User", new mongoose.Schema({
   balance: { type: Number, default: 1000 }
 }));
 
-const Username = mongoose.model("Username", new mongoose.Schema({
+const Item = mongoose.model("Item", new mongoose.Schema({
   name: { type: String, unique: true },
   ownerId: String,
   value: Number,
   rarity: String,
-  forSale: { type: Boolean, default: false },
+  forSale: Boolean,
   price: Number,
   locked: { type: Boolean, default: false }
+}));
+
+const Auction = mongoose.model("Auction", new mongoose.Schema({
+  item: String,
+  seller: String,
+  highestBid: Number,
+  highestBidder: String,
+  endTime: Number,
+  active: Boolean
 }));
 
 const Trade = mongoose.model("Trade", new mongoose.Schema({
@@ -46,16 +56,8 @@ const Trade = mongoose.model("Trade", new mongoose.Schema({
   to: String,
   offer: String,
   request: String,
-  status: { type: String, default: "pending" }
-}));
-
-const Auction = mongoose.model("Auction", new mongoose.Schema({
-  item: String,
-  sellerId: String,
-  highestBid: { type: Number, default: 0 },
-  highestBidder: String,
-  endsAt: Number,
-  active: { type: Boolean, default: true }
+  locked: { type: Boolean, default: true },
+  status: String
 }));
 
 // ================= HELPERS =================
@@ -67,12 +69,16 @@ async function getUser(id) {
   );
 }
 
-function isOwner(id) {
-  return id === OWNER_ID;
+function rarity(name) {
+  if (name.length === 1) return "MYTHIC";
+  if (name.length === 2) return "LEGENDARY";
+  if (name.length === 3) return "EPIC";
+  if (name.length === 4) return "RARE";
+  return "COMMON";
 }
 
-// 🧠 AI PRICING ENGINE
-function aiPrice(name) {
+// AI PRICE ENGINE (simple simulation)
+function price(name) {
   let base =
     name.length === 1 ? 10000000 :
     name.length === 2 ? 2000000 :
@@ -80,10 +86,12 @@ function aiPrice(name) {
     name.length === 4 ? 120000 :
     5000;
 
-  if (/[0-9]/.test(name)) base *= 0.7;
-  if (/^[a-z]+$/.test(name)) base *= 1.2;
+  if (ECONOMY_STATE === "inflation") base *= 2;
+  if (ECONOMY_STATE === "crash") base *= 0.5;
 
-  return Math.floor(base * INFLATION);
+  if (/[0-9]/.test(name)) base *= 0.8;
+
+  return Math.floor(base * MULTIPLIER);
 }
 
 // ================= COMMANDS =================
@@ -93,128 +101,65 @@ const commands = [
     .setName("claim")
     .setDescription("Claim username")
     .addStringOption(o =>
-      o.setName("name")
-        .setDescription("Username to claim")
-        .setRequired(true)
+      o.setName("name").setDescription("username").setRequired(true)
     ),
 
   new SlashCommandBuilder()
-    .setName("users")
-    .setDescription("Inventory"),
+    .setName("balance")
+    .setDescription("Check balance"),
 
   new SlashCommandBuilder()
-    .setName("balance")
-    .setDescription("Balance"),
+    .setName("inventory")
+    .setDescription("View items"),
 
   new SlashCommandBuilder()
     .setName("market")
-    .setDescription("Market"),
+    .setDescription("Marketplace"),
+
+  new SlashCommandBuilder()
+    .setName("buy")
+    .setDescription("Buy item")
+    .addStringOption(o =>
+      o.setName("name").setDescription("item").setRequired(true)
+    ),
+
+  new SlashCommandBuilder()
+    .setName("sell")
+    .setDescription("Sell item")
+    .addStringOption(o =>
+      o.setName("name").setDescription("item").setRequired(true)
+    )
+    .addIntegerOption(o =>
+      o.setName("price").setDescription("price").setRequired(true)
+    ),
+
+  new SlashCommandBuilder()
+    .setName("auction")
+    .setDescription("Place bid")
+    .addStringOption(o =>
+      o.setName("item").setDescription("item").setRequired(true)
+    )
+    .addIntegerOption(o =>
+      o.setName("amount").setDescription("bid").setRequired(true)
+    ),
 
   new SlashCommandBuilder()
     .setName("trade")
     .setDescription("Escrow trade")
     .addUserOption(o =>
-      o.setName("user")
-        .setDescription("Trade target user")
-        .setRequired(true)
+      o.setName("user").setDescription("user").setRequired(true)
     )
     .addStringOption(o =>
-      o.setName("offer")
-        .setDescription("Your item")
-        .setRequired(true)
+      o.setName("offer").setDescription("your item").setRequired(true)
     )
     .addStringOption(o =>
-      o.setName("request")
-        .setDescription("Their item")
-        .setRequired(true)
+      o.setName("request").setDescription("their item").setRequired(true)
     ),
 
-  new SlashCommandBuilder()
-    .setName("transfer")
-    .setDescription("Transfer username")
-    .addUserOption(o =>
-      o.setName("user")
-        .setDescription("Target user")
-        .setRequired(true)
-    )
-    .addStringOption(o =>
-      o.setName("name")
-        .setDescription("Username")
-        .setRequired(true)
-    ),
-
-  new SlashCommandBuilder()
-    .setName("bid")
-    .setDescription("Bid auction")
-    .addStringOption(o =>
-      o.setName("item")
-        .setDescription("Auction item")
-        .setRequired(true)
-    )
-    .addIntegerOption(o =>
-      o.setName("amount")
-        .setDescription("Bid amount")
-        .setRequired(true)
-    ),
-
-  new SlashCommandBuilder()
-    .setName("leaderboard")
-    .setDescription("Top users"),
-
-  // ===== ADMIN =====
   new SlashCommandBuilder()
     .setName("admin")
-    .setDescription("Admin panel"),
+    .setDescription("Admin panel")
 
-  new SlashCommandBuilder()
-    .setName("addmoney")
-    .setDescription("Add money")
-    .addUserOption(o =>
-      o.setName("user")
-        .setDescription("User")
-        .setRequired(true)
-    )
-    .addIntegerOption(o =>
-      o.setName("amount")
-        .setDescription("Amount")
-        .setRequired(true)
-    ),
-
-  new SlashCommandBuilder()
-    .setName("removemoney")
-    .setDescription("Remove money")
-    .addUserOption(o =>
-      o.setName("user")
-        .setDescription("User")
-        .setRequired(true)
-    )
-    .addIntegerOption(o =>
-      o.setName("amount")
-        .setDescription("Amount")
-        .setRequired(true)
-    ),
-
-  new SlashCommandBuilder()
-    .setName("setmoney")
-    .setDescription("Set balance")
-    .addUserOption(o =>
-      o.setName("user")
-        .setDescription("User")
-        .setRequired(true)
-    )
-    .addIntegerOption(o =>
-      o.setName("amount")
-        .setDescription("Amount")
-        .setRequired(true)
-    )
-  new SlashCommandBuilder()
-  .setName("buy")
-  .setDescription("Buy a username from the market")
-  .addStringOption(o =>
-    o.setName("name")
-      .setDescription("Username to buy")
-      .setRequired(true)
-  ),
 ].map(c => c.toJSON());
 
 // ================= REGISTER =================
@@ -225,255 +170,73 @@ client.once("ready", async () => {
     Routes.applicationGuildCommands(process.env.CLIENT_ID, process.env.GUILD_ID),
     { body: commands }
   );
-  console.log("ONLINE");
+
+  console.log("V2 ECONOMY ONLINE");
 });
 
-// ================= MAIN =================
+// ================= CLAIM =================
 client.on("interactionCreate", async (i) => {
   if (!i.isChatInputCommand()) return;
 
   const u = await getUser(i.user.id);
 
-  // ===== CLAIM =====
   if (i.commandName === "claim") {
-  const name = i.options.getString("name");
+    const name = i.options.getString("name");
 
-  const exists = await Username.findOne({ name });
+    const exists = await Item.findOne({ name });
+    if (exists)
+      return i.reply(`❌ Taken by <@${exists.ownerId}>`);
 
-  // ❌ already taken → PING OWNER
-  if (exists) {
-    return i.reply({
-      content: `❌ That username is already owned by <@${exists.ownerId}>`
+    const item = await Item.create({
+      name,
+      ownerId: i.user.id,
+      value: price(name),
+      rarity: rarity(name)
     });
+
+    return i.reply(`✅ Claimed **${item.name}** (${item.rarity})`);
   }
 
-  // ✅ create claim
-  await Username.create({
-    name,
-    ownerId: i.user.id,
-    value: 1000,
-    rarity: "COMMON"
-  });
-
-  return i.reply(`✅ You claimed **${name}**`);
-}
-
-  // ===== INVENTORY (FIXED PAGINATION SAFE) =====
-  if (i.commandName === "users") {
-    const items = await Username.find({ ownerId: i.user.id });
-
-    if (!items.length) return i.reply("Empty");
-
-    const page = items.slice(0, 25);
-
-    const menu = new ActionRowBuilder().addComponents(
-      new StringSelectMenuBuilder()
-        .setCustomId("inv")
-        .setPlaceholder("Select item")
-        .addOptions(
-          page.map(x => ({
-            label: x.name,
-            description: `${x.rarity} | ${x.value}`,
-            value: x.name
-          }))
-        )
-    );
-
-    return i.reply({
-      content: "📦 Inventory (page 1)",
-      components: [menu],
-      ephemeral: true
-    });
-  }
-
-  // ===== BALANCE =====
+  // BALANCE
   if (i.commandName === "balance") {
     return i.reply(`💰 ${u.balance}`);
   }
 
-  // ===== MARKET =====
-  if (i.commandName === "market") {
-    const items = await Username.find({ forSale: true });
-
-    const embed = new EmbedBuilder()
-      .setTitle("🏪 MARKET")
-      .setDescription(
-        items.slice(0, 10).map(x =>
-          `📦 ${x.name} — 💰 ${x.price} — 👤 <@${x.ownerId}>`
-        ).join("\n") || "Empty"
-      );
-
-    return i.reply({ embeds: [embed] });
-  }
-
-  // ===== TRADE (FULL ESCROW SAFE SWAP) =====
-  if (i.commandName === "trade") {
-    const target = i.options.getUser("user");
-
-    const trade = await Trade.create({
-      from: i.user.id,
-      to: target.id,
-      offer: i.options.getString("offer"),
-      request: i.options.getString("request")
-    });
-
-    const row = new ActionRowBuilder().addComponents(
-      new ButtonBuilder()
-        .setCustomId(`trade_accept_${trade._id}`)
-        .setLabel("ACCEPT")
-        .setStyle(ButtonStyle.Success),
-
-      new ButtonBuilder()
-        .setCustomId(`trade_deny_${trade._id}`)
-        .setLabel("DENY")
-        .setStyle(ButtonStyle.Danger)
-    );
-
-    return i.reply({
-      content: `🔒 Trade sent to <@${target.id}>`,
-      components: [row]
-    });
-  }
-
-  // ===== TRANSFER (PING OWNER FIXED) =====
-  if (i.commandName === "transfer") {
-  const user = i.options.getUser("user");
-  const name = i.options.getString("name");
-
-  const item = await Username.findOne({ name, ownerId: i.user.id });
-  if (!item) return i.reply("Not yours");
-
-  const oldOwner = item.ownerId;
-
-  item.ownerId = user.id;
-  await item.save();
-
-  await i.reply(`✅ Transferred **${name}** to <@${user.id}>`);
-
-  // 🔔 PINGS
-  i.channel.send(`📦 <@${oldOwner}> gave **${name}** to <@${user.id}>`);
-}
-
-  // ===== LEADERBOARD =====
-  if (i.commandName === "leaderboard") {
-    const top = await User.find().sort({ balance: -1 }).limit(10);
-
-    return i.reply(
-      top.map((x, idx) =>
-        `#${idx + 1} <@${x.discordId}> — 💰 ${x.balance}`
-      ).join("\n")
-    );
-  }
-
-  // ===== ADMIN PANEL =====
+  // ADMIN ONLY
   if (i.commandName === "admin") {
-    if (!isOwner(i.user.id)) return i.reply("No permission");
-
-    const users = await User.countDocuments();
-    const items = await Username.countDocuments();
+    if (i.user.id !== OWNER_ID) return i.reply("No permission");
 
     return i.reply({
       embeds: [
         new EmbedBuilder()
-          .setTitle("📊 ADMIN DASHBOARD")
+          .setTitle("📊 ECONOMY STATUS")
           .addFields(
-            { name: "Users", value: `${users}`, inline: true },
-            { name: "Items", value: `${items}`, inline: true }
+            { name: "State", value: ECONOMY_STATE },
+            { name: "Multiplier", value: `${MULTIPLIER}` }
           )
       ]
     });
   }
-
-  const commands = [
-
-  new SlashCommandBuilder().setName("claim")...
-  new SlashCommandBuilder().setName("users")...
-  new SlashCommandBuilder().setName("balance")...
-
-  // 👇 ADD IT HERE
-  new SlashCommandBuilder()
-    .setName("buy")
-    .setDescription("Buy a username from the market")
-    .addStringOption(o =>
-      o.setName("name")
-        .setDescription("Username to buy")
-        .setRequired(true)
-    ),
-
-  new SlashCommandBuilder().setName("trade")...
-];
-  // ===== ADMIN MONEY COMMANDS =====
-  if (!isOwner(i.user.id)) return;
-
-  if (i.commandName === "addmoney") {
-    const user = i.options.getUser("user");
-    const amount = i.options.getInteger("amount");
-
-    const d = await getUser(user.id);
-    d.balance += amount;
-    await d.save();
-
-    return i.reply("Added");
-  }
-
-  if (i.commandName === "removemoney") {
-    const user = i.options.getUser("user");
-    const amount = i.options.getInteger("amount");
-
-    const d = await getUser(user.id);
-    d.balance -= amount;
-    await d.save();
-
-    return i.reply("Removed");
-  }
-
-  if (i.commandName === "setmoney") {
-    const user = i.options.getUser("user");
-    const amount = i.options.getInteger("amount");
-
-    const d = await getUser(user.id);
-    d.balance = amount;
-    await d.save();
-
-    return i.reply("Set");
-  }
 });
 
-// ===== TRADE BUTTON HANDLER (SAFE SWAP FINAL) =====
-client.on("interactionCreate", async (i) => {
-  if (!i.isButton()) return;
+// ================= ECONOMY EVENTS =================
+// random inflation / crash system
+setInterval(() => {
+  const roll = Math.random();
 
-  const [type, action, id] = i.customId.split("_");
-  if (type !== "trade") return;
-
-  const trade = await Trade.findById(id);
-  if (!trade) return i.reply({ content: "Expired", ephemeral: true });
-
-  if (i.user.id !== trade.from && i.user.id !== trade.to)
-    return i.reply({ content: "Not your trade", ephemeral: true });
-
-  if (action === "deny") {
-    await trade.deleteOne();
-    return i.update({ content: "Trade denied", components: [] });
+  if (roll < 0.05) {
+    ECONOMY_STATE = "crash";
+    MULTIPLIER = 0.6;
+  } else if (roll < 0.15) {
+    ECONOMY_STATE = "inflation";
+    MULTIPLIER = 2;
+  } else {
+    ECONOMY_STATE = "stable";
+    MULTIPLIER = 1;
   }
 
-  if (action === "accept") {
-    const itemA = await Username.findOne({ name: trade.offer, ownerId: trade.from });
-    const itemB = await Username.findOne({ name: trade.request, ownerId: trade.to });
+  console.log("Economy updated:", ECONOMY_STATE);
+}, 60000);
 
-    if (!itemA || !itemB)
-      return i.update({ content: "Trade failed", components: [] });
-
-    const temp = itemA.ownerId;
-    itemA.ownerId = itemB.ownerId;
-    itemB.ownerId = temp;
-
-    await itemA.save();
-    await itemB.save();
-    await trade.deleteOne();
-
-    return i.update({ content: "Trade completed", components: [] });
-  }
-});
-
+// ================= LOGIN =================
 client.login(process.env.TOKEN);
