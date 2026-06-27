@@ -207,7 +207,14 @@ const commands = [
         .setDescription("Amount")
         .setRequired(true)
     )
-
+  new SlashCommandBuilder()
+  .setName("buy")
+  .setDescription("Buy a username from the market")
+  .addStringOption(o =>
+    o.setName("name")
+      .setDescription("Username to buy")
+      .setRequired(true)
+  ),
 ].map(c => c.toJSON());
 
 // ================= REGISTER =================
@@ -229,20 +236,27 @@ client.on("interactionCreate", async (i) => {
 
   // ===== CLAIM =====
   if (i.commandName === "claim") {
-    const name = i.options.getString("name");
+  const name = i.options.getString("name");
 
-    const exists = await Username.findOne({ name });
-    if (exists) return i.reply("Taken");
+  const exists = await Username.findOne({ name });
 
-    await Username.create({
-      name,
-      ownerId: i.user.id,
-      value: aiPrice(name),
-      rarity: "COMMON"
+  // ❌ already taken → PING OWNER
+  if (exists) {
+    return i.reply({
+      content: `❌ That username is already owned by <@${exists.ownerId}>`
     });
-
-    return i.reply(`✅ Claimed ${name}`);
   }
+
+  // ✅ create claim
+  await Username.create({
+    name,
+    ownerId: i.user.id,
+    value: 1000,
+    rarity: "COMMON"
+  });
+
+  return i.reply(`✅ You claimed **${name}**`);
+}
 
   // ===== INVENTORY (FIXED PAGINATION SAFE) =====
   if (i.commandName === "users") {
@@ -323,19 +337,22 @@ client.on("interactionCreate", async (i) => {
 
   // ===== TRANSFER (PING OWNER FIXED) =====
   if (i.commandName === "transfer") {
-    const user = i.options.getUser("user");
-    const name = i.options.getString("name");
+  const user = i.options.getUser("user");
+  const name = i.options.getString("name");
 
-    const item = await Username.findOne({ name, ownerId: i.user.id });
-    if (!item) return i.reply("Not yours");
+  const item = await Username.findOne({ name, ownerId: i.user.id });
+  if (!item) return i.reply("Not yours");
 
-    item.ownerId = user.id;
-    await item.save();
+  const oldOwner = item.ownerId;
 
-    i.channel.send(`🔔 <@${user.id}> received **${name}**`);
+  item.ownerId = user.id;
+  await item.save();
 
-    return i.reply("Transferred");
-  }
+  await i.reply(`✅ Transferred **${name}** to <@${user.id}>`);
+
+  // 🔔 PINGS
+  i.channel.send(`📦 <@${oldOwner}> gave **${name}** to <@${user.id}>`);
+}
 
   // ===== LEADERBOARD =====
   if (i.commandName === "leaderboard") {
@@ -367,6 +384,24 @@ client.on("interactionCreate", async (i) => {
     });
   }
 
+  const commands = [
+
+  new SlashCommandBuilder().setName("claim")...
+  new SlashCommandBuilder().setName("users")...
+  new SlashCommandBuilder().setName("balance")...
+
+  // 👇 ADD IT HERE
+  new SlashCommandBuilder()
+    .setName("buy")
+    .setDescription("Buy a username from the market")
+    .addStringOption(o =>
+      o.setName("name")
+        .setDescription("Username to buy")
+        .setRequired(true)
+    ),
+
+  new SlashCommandBuilder().setName("trade")...
+];
   // ===== ADMIN MONEY COMMANDS =====
   if (!isOwner(i.user.id)) return;
 
