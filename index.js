@@ -69,50 +69,134 @@ function rarity(name) {
 // ================= COMMANDS =================
 const commands = [
 
-  new SlashCommandBuilder().setName("claim").setDescription("Claim username")
-    .addStringOption(o => o.setName("name").setDescription("name").setRequired(true)),
+  new SlashCommandBuilder()
+    .setName("claim")
+    .setDescription("Claim a username")
+    .addStringOption(o =>
+      o.setName("name")
+        .setDescription("Username to claim")
+        .setRequired(true)
+    ),
 
-  new SlashCommandBuilder().setName("balance").setDescription("Check balance"),
+  new SlashCommandBuilder()
+    .setName("balance")
+    .setDescription("Check your balance"),
 
-  new SlashCommandBuilder().setName("inventory").setDescription("View your items"),
+  new SlashCommandBuilder()
+    .setName("inventory")
+    .setDescription("View your items"),
 
-  new SlashCommandBuilder().setName("market").setDescription("View market"),
+  new SlashCommandBuilder()
+    .setName("market")
+    .setDescription("View marketplace"),
 
-  new SlashCommandBuilder().setName("sell").setDescription("Sell item")
-    .addStringOption(o => o.setName("name").setRequired(true))
-    .addIntegerOption(o => o.setName("price").setRequired(true)),
+  new SlashCommandBuilder()
+    .setName("sell")
+    .setDescription("Sell an item")
+    .addStringOption(o =>
+      o.setName("name")
+        .setDescription("Item name")
+        .setRequired(true)
+    )
+    .addIntegerOption(o =>
+      o.setName("price")
+        .setDescription("Sale price")
+        .setRequired(true)
+    ),
 
-  new SlashCommandBuilder().setName("buy").setDescription("Buy item")
-    .addStringOption(o => o.setName("name").setRequired(true)),
+  new SlashCommandBuilder()
+    .setName("buy")
+    .setDescription("Buy an item")
+    .addStringOption(o =>
+      o.setName("name")
+        .setDescription("Item name")
+        .setRequired(true)
+    ),
 
-  new SlashCommandBuilder().setName("transfer").setDescription("Transfer item")
-    .addUserOption(o => o.setName("user").setRequired(true))
-    .addStringOption(o => o.setName("name").setRequired(true)),
+  new SlashCommandBuilder()
+    .setName("transfer")
+    .setDescription("Transfer an item")
+    .addUserOption(o =>
+      o.setName("user")
+        .setDescription("Target user")
+        .setRequired(true)
+    )
+    .addStringOption(o =>
+      o.setName("name")
+        .setDescription("Item name")
+        .setRequired(true)
+    ),
 
-  new SlashCommandBuilder().setName("trade").setDescription("Escrow trade")
-    .addUserOption(o => o.setName("user").setRequired(true))
-    .addStringOption(o => o.setName("offer").setRequired(true))
-    .addStringOption(o => o.setName("request").setRequired(true)),
+  new SlashCommandBuilder()
+    .setName("trade")
+    .setDescription("Escrow trade system")
+    .addUserOption(o =>
+      o.setName("user")
+        .setDescription("Trade partner")
+        .setRequired(true)
+    )
+    .addStringOption(o =>
+      o.setName("offer")
+        .setDescription("What you offer")
+        .setRequired(true)
+    )
+    .addStringOption(o =>
+      o.setName("request")
+        .setDescription("What you want")
+        .setRequired(true)
+    ),
 
-  new SlashCommandBuilder().setName("leaderboard").setDescription("Top users"),
+  new SlashCommandBuilder()
+    .setName("leaderboard")
+    .setDescription("Top users"),
 
   // ===== ADMIN =====
-  new SlashCommandBuilder().setName("admin").setDescription("Admin panel"),
 
-  new SlashCommandBuilder().setName("addmoney").setDescription("Add money")
-    .addUserOption(o => o.setName("user").setDescription("user").setRequired(true))
-    .addIntegerOption(o => o.setName("amount").setDescription("amount").setRequired(true)),
+  new SlashCommandBuilder()
+    .setName("admin")
+    .setDescription("Admin dashboard (owner only)"),
 
-  new SlashCommandBuilder().setName("removemoney").setDescription("Remove money")
-    .addUserOption(o => o.setName("user").setDescription("user").setRequired(true))
-    .addIntegerOption(o => o.setName("amount").setDescription("amount").setRequired(true)),
+  new SlashCommandBuilder()
+    .setName("addmoney")
+    .setDescription("Add money to user")
+    .addUserOption(o =>
+      o.setName("user")
+        .setDescription("Target user")
+        .setRequired(true)
+    )
+    .addIntegerOption(o =>
+      o.setName("amount")
+        .setDescription("Amount")
+        .setRequired(true)
+    ),
 
-  new SlashCommandBuilder().setName("setmoney").setDescription("Set money")
-    .addUserOption(o => o.setName("user").setDescription("user").setRequired(true))
-    .addIntegerOption(o => o.setName("amount").setDescription("amount").setRequired(true)),
+  new SlashCommandBuilder()
+    .setName("removemoney")
+    .setDescription("Remove money from user")
+    .addUserOption(o =>
+      o.setName("user")
+        .setDescription("Target user")
+        .setRequired(true)
+    )
+    .addIntegerOption(o =>
+      o.setName("amount")
+        .setDescription("Amount")
+        .setRequired(true)
+    ),
 
-  new SlashCommandBuilder().setName("deleteitem").setDescription("Delete item")
-    .addStringOption(o => o.setName("name").setRequired(true))
+  new SlashCommandBuilder()
+    .setName("setmoney")
+    .setDescription("Set user balance")
+    .addUserOption(o =>
+      o.setName("user")
+        .setDescription("Target user")
+        .setRequired(true)
+    )
+    .addIntegerOption(o =>
+      o.setName("amount")
+        .setDescription("Amount")
+        .setRequired(true)
+    )
 
 ].map(c => c.toJSON());
 
